@@ -1,0 +1,32 @@
+# ============================================================
+# 育儿记录 · scripts.yaml 片段
+#
+# 用法：把下面内容追加到 /config/scripts.yaml
+# ============================================================
+
+# 补记喂奶：用 input_datetime 里的时间写一条记录
+# 只允许补记「当天」，避免误补历史数据
+bu_ji_wei_nai:
+  alias: 补记喂奶（用上面的时间）
+  icon: mdi:baby-bottle-outline
+  mode: single
+  sequence:
+    # 条件：只能补当天
+    - condition: template
+      value_template: >-
+        {{ as_datetime(states('input_datetime.wei_nai_shi_jian')).date() == now().date() }}
+
+    # 写入清单
+    - service: todo.add_item
+      target:
+        entity_id: todo.bao_bao_ji_lu
+      data:
+        item: >-
+          {{ as_datetime(states('input_datetime.wei_nai_shi_jian')).strftime('%m-%d %H:%M') }} 🍼 喂奶｜补记
+
+    # 写日志（方便排查）
+    - service: logbook.log
+      data:
+        name: 育儿记录
+        message: >-
+          补记喂奶 {{ as_datetime(states('input_datetime.wei_nai_shi_jian')).strftime('%m-%d %H:%M') }}

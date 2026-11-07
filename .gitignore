@@ -1,0 +1,20 @@
+# 真实配置（含凭据/实体 ID）
+secrets.yaml
+*.cred
+/.storage/
+
+# 日志
+*.log
+
+# 临时文件
+*.tmp
+*.swp
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 生成物
+__pycache__/
+*.pyc

@@ -1,0 +1,221 @@
+# ============================================================
+# 育儿记录自动化（5 条）
+#
+# ⚠️ 使用前必须替换：
+#   YOUR_HOME_SCREEN_ID  → 客厅家庭屏设备 ID（如 1234567890）
+#   YOUR_HUB_DEVICE_ID   → 小米中枢网关设备 ID
+#   YOUR_ROOM1_PANEL_ID  → 主卧 86 面板设备 ID
+#   YOUR_ROOM2_PANEL_ID  → 北次卧 86 面板设备 ID
+#   YOUR_ROOM3_PANEL_ID  → 南次卧 86 面板设备 ID
+#                          设备 ID = 实体 ID 里 xiaomi_cn_ 后面那串数字
+#
+# 合并到 /config/automations.yaml 即可（追加到列表末尾）
+# ============================================================
+
+- id: 'baby_log_panel'
+  alias: 面板口令育儿记录（中枢虚拟事件）
+  description: 主卧/次卧面板说固定口令 → 米家场景触发中枢虚拟事件 → 自动写入「宝宝记录」清单并发手机通知
+  triggers:
+  - trigger: state
+    entity_id:
+    - event.xiaomi_cn_YOUR_HUB_DEVICE_ID_hub1_virtual_event_e_4_1
+  conditions: []
+  actions:
+  - if:
+    - condition: template
+      value_template: '{{ back }}'
+    then:
+    - action: input_datetime.set_datetime
+      target:
+        entity_id: input_datetime.wei_nai_shi_jian
+      data:
+        time: '{{ bt }}'
+    - action: script.bu_ji_wei_nai
+    - stop: 补记完成
+  - variables:
+      nm: '{% set ts = trigger.to_state %}{{ (ts.attributes.get(''事件名称'','''') | trim) if ts is not none else '''' }}'
+      tl: '{% set ts = trigger.to_state %}{{ ((ts.attributes.get(''事件名称'','''')) | lower) if ts is not none else '''' }}'
+      amt: '{% set ts = trigger.to_state %}{{ ((ts.attributes.get(''事件名称'','''')) if ts is not none else '''') | regex_findall(''(\d+(?:\.\d+)?)\s*(?:毫升|ml|cc)'') | first | default('''', true) }}'
+      mins: '{% set ts = trigger.to_state %}{{ ((ts.attributes.get(''事件名称'','''')) if ts is not none else '''') | regex_findall(''(\d+)\s*(?:分钟|min)'') | first | default('''', true) }}'
+      kind: '{% if ''拉屎'' in nm or ''拉了'' in nm or ''臭臭'' in nm or ''便便'' in nm or ''大便'' in nm %}便便{% elif ''尿布'' in nm or ''尿尿'' in nm or ''尿了'' in nm %}尿尿{% elif ''喝水'' in nm or ''喂水'' in nm %}喝水{% elif ''辅食'' in nm or
+        ''米糊'' in nm or ''果泥'' in nm or ''粥'' in nm %}辅食{% elif ''吸奶'' in nm or ''挤奶'' in nm or ''泵奶'' in nm %}吸奶{% elif ''睡'' in nm %}睡眠{% elif ''醒'' in nm %}醒来{% elif ''喂奶'' in nm or ''喝奶'' in nm or ''吃奶'' in nm or ''奶粉''
+        in nm or ''母乳'' in nm or ''亲喂'' in nm or ''乳'' in nm or ''奶'' in nm or ''毫升'' in tl or ''ml'' in tl %}喂奶{% else %}其他{% endif %}'
+      isq: '{{ (''什么时候'' in nm) or (''多久'' in nm) or (''几点'' in nm) or (''几时'' in nm) or (''多长'' in nm) or (''几次'' in nm) or (''多少'' in nm) or (''时间'' in nm) or (''上次'' in nm) or (''上一顿'' in nm) or (''查询'' in nm) or (''查一下''
+        in nm) or (''问一下'' in nm) or (''？'' in nm) or (''?'' in nm) }}'
+      back: '{{ ''补记'' in nm }}'
+      bt: '{% set tm = nm | regex_findall(''(\\d{1,2})[:：点](\\d{1,2})'') %}{% if tm %}{{ ''%02d:%02d:00'' | format(tm[0][0]|int, tm[0][1]|int) }}{% else %}{% set h = nm | regex_findall(''(\\d{1,2})点'') %}{% if h %}{{ ''%02d:00:00''
+        | format(h[0]|int) }}{% endif %}{% endif %}'
+  - condition: template
+    value_template: '{{ kind != ''其他'' and not isq }}'
+  - variables:
+      emoji: '{{ {''喂奶'':''🍼'',''换尿布'':''🧷'',''尿尿'':''🧷'',''便便'':''💩'',''睡眠'':''😴'',''醒来'':''☀️'',''喝水'':''💧'',''辅食'':''🥣'',''吸奶'':''🥛''}.get(kind,''📝'') }}'
+      line: '{{ now().strftime(''%m-%d %H:%M'') }} {{ emoji }} {{ kind }}{% if amt %} {{ amt }}ml{% endif %}{% if mins %} {{ mins }}分钟{% endif %}｜{{ nm }}'
+  - action: todo.add_item
+    target:
+      entity_id: todo.bao_bao_ji_lu
+    data:
+      item: '{{ line }}'
+  - action: logbook.log
+    data:
+      name: 育儿记录
+      message: '{{ line }}'
+    metadata: {}
+    continue_on_error: true
+  mode: queued
+  max: 10
+- id: 'baby_log_voice'
+  alias: 小爱语音育儿记录（客厅家庭屏·自由说话）
+  description: 客厅家庭屏的小爱对话原文 → 自动识别类型与奶量 → 写入「宝宝记录」清单并推送到手机
+  triggers:
+  - trigger: template
+    value_template: '{% set s = states(''sensor.xiao_ai_yuan_hua_shi_jian_chuo'') %}{% set last = state_attr(''automation.xiao_ai_yu_yin_yu_er_ji_lu_ke_ting_jia_ting_ping_zi_you_shuo_hua'',''last_triggered'') %}{{ s not in
+      [''none'',''unknown'',''unavailable'',''''] and (last is none or as_datetime(s) > last) }}'
+  conditions: []
+  actions:
+  - variables:
+      src: '{% set all = states.sensor | selectattr(''entity_id'',''search'',''_conversation'') | list %}{% set pref = all | selectattr(''entity_id'',''search'',''YOUR_HOME_SCREEN_ID|x8f'') | list %}{% set e = pref if pref | count
+        > 0 else all %}{{ e[0].entity_id if e | count > 0 else '''' }}'
+  - condition: template
+    value_template: '{{ src != '''' }}'
+  - action: homeassistant.update_entity
+    target:
+      entity_id: '{{ src }}'
+    continue_on_error: true
+  - delay:
+      seconds: 2
+  - variables:
+      txt: '{{ states(src) | trim }}'
+      tl: '{{ states(src) | lower }}'
+      amt: '{{ states(src) | regex_findall(''(\d+(?:\.\d+)?)\s*(?:毫升|ml|cc)'') | first | default('''', true) }}'
+      mins: '{{ states(src) | regex_findall(''(\d+)\s*(?:分钟|min)'') | first | default('''', true) }}'
+      kind: '{% if ''拉屎'' in txt or ''拉了'' in txt or ''臭臭'' in txt or ''便便'' in txt or ''大便'' in txt %}便便{% elif ''尿布'' in txt or ''尿尿'' in txt or ''尿了'' in txt %}尿尿{% elif ''喝水'' in txt or ''喂水'' in txt or (''水'' in txt and
+        (''喝'' in txt or ''喂'' in txt)) %}喝水{% elif ''辅食'' in txt or ''米糊'' in txt or ''果泥'' in txt or ''粥'' in txt %}辅食{% elif ''吸奶'' in txt or ''挤奶'' in txt or ''泵奶'' in txt %}吸奶{% elif ''睡'' in txt %}睡眠{% elif ''醒'' in
+        txt %}醒来{% elif ''喂奶'' in txt or ''喝奶'' in txt or ''吃奶'' in txt or ''奶粉'' in txt or ''母乳'' in txt or ''亲喂'' in txt or ''乳'' in txt or ''奶'' in txt or ''毫升'' in tl or ''ml'' in tl or ''cc'' in tl %}喂奶{% else %}其他{%
+        endif %}'
+      strong: '{{ True if (''奶'' in txt or ''毫升'' in tl or ''ml'' in tl or ''cc'' in tl or ''尿布'' in txt or ''拉了'' in txt or ''尿了'' in txt or ''拉屎'' in txt or ''尿尿'' in txt or ''臭臭'' in txt or ''便便'' in txt or ''辅食'' in txt
+        or ''米糊'' in txt or ''果泥'' in txt or ''吸奶'' in txt or ''挤奶'' in txt or ''泵奶'' in txt) else False }}'
+      baby: '{{ True if (''宝宝'' in txt or ''娃'' in txt or ''闺女'' in txt or ''儿子'' in txt or ''团团'' in txt) else False }}'
+      isq: '{{ (''什么时候'' in txt) or (''多久'' in txt) or (''几点'' in txt) or (''几时'' in txt) or (''多长'' in txt) or (''几次'' in txt) or (''多少'' in txt) or (''时间'' in txt) or (''上次'' in txt) or (''上一顿'' in txt) or (''查询'' in txt)
+        or (''查一下'' in txt) or (''问一下'' in txt) or (''？'' in txt) or (''?'' in txt) }}'
+      back: '{{ ''补记'' in txt }}'
+      bt: '{% set tm = txt | regex_findall(''(\\d{1,2})[:：点](\\d{1,2})'') %}{% if tm %}{{ ''%02d:%02d:00'' | format(tm[0][0]|int, tm[0][1]|int) }}{% else %}{% set h = txt | regex_findall(''(\\d{1,2})点'') %}{% if h %}{{ ''%02d:00:00''
+        | format(h[0]|int) }}{% endif %}{% endif %}'
+  - if:
+    - condition: template
+      value_template: '{{ back }}'
+    then:
+    - action: input_datetime.set_datetime
+      target:
+        entity_id: input_datetime.wei_nai_shi_jian
+      data:
+        time: '{{ bt }}'
+    - action: script.bu_ji_wei_nai
+    - stop: 补记完成
+  - condition: template
+    value_template: '{{ txt not in [''none'',''unknown'',''unavailable'',''''] and kind != ''其他'' and (not isq) and (strong or baby) }}'
+  - variables:
+      emoji: '{{ {''喂奶'':''🍼'',''换尿布'':''🧷'',''尿尿'':''🧷'',''便便'':''💩'',''睡眠'':''😴'',''醒来'':''☀️'',''喝水'':''💧'',''辅食'':''🥣'',''吸奶'':''🥛''}.get(kind,''📝'') }}'
+      line: '{{ now().strftime(''%m-%d %H:%M'') }} {{ emoji }} {{ kind }}{% if amt %} {{ amt }}ml{% endif %}{% if mins %} {{ mins }}分钟{% endif %}｜{{ txt }}'
+  - action: todo.add_item
+    target:
+      entity_id: todo.bao_bao_ji_lu
+    data:
+      item: '{{ line }}'
+  - action: logbook.log
+    data:
+      name: 育儿记录
+      message: '{{ line }}'
+    metadata: {}
+    continue_on_error: true
+  mode: queued
+  max: 10
+- id: 'baby_timer'
+  alias: 喂奶计时器
+  description: 只在「喂奶类」事件上更新 last_triggered，作为「距上次喂奶多久」的持久状态（静默：不发声、不推送）
+  triggers:
+  - trigger: state
+    entity_id: event.xiaomi_cn_YOUR_HUB_DEVICE_ID_hub1_virtual_event_e_4_1
+  - trigger: state
+    entity_id: sensor.xiao_ai_yuan_hua_shi_jian_chuo
+  conditions:
+  - condition: template
+    value_template: '{% set st = trigger.to_state %}{% set ev = st.attributes.get(''事件名称'') if st is not none else none %}{% set t = ev if ev not in [none,'''',None] else states(''sensor.xiao_ai_yuan_hua'') %}{% set key =
+      (''奶'' in t) or (''毫升'' in t) or (''ml'' in (t|lower)) or (''母乳'' in t) or (''亲喂'' in t) %}{% set fresh = true %}{% if ev in [none,'''',None] %}{% set stt = st.state if st is not none else '''' %}{% set last = state_attr(''automation.wei_nai_ji_shi_qi'',''last_triggered'')
+      %}{% if stt not in [''none'',''unknown'',''unavailable'',''''] and last is not none %}{% set fresh = as_datetime(stt) > last %}{% endif %}{% endif %}{% set isq = (''什么时候'' in t) or (''多久'' in t) or (''几点'' in t) or (''几时''
+      in t) or (''多长'' in t) or (''几次'' in t) or (''多少'' in t) or (''时间'' in t) or (''上次'' in t) or (''上一顿'' in t) or (''查询'' in t) or (''查一下'' in t) or (''问一下'' in t) or (''？'' in t) or (''?'' in t) %}{{ key and fresh and
+      not isq }}'
+  actions:
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.wei_nai_shi_jian
+    data:
+      datetime: '{{ now().strftime(''%Y-%m-%d %H:%M:%S'') }}'
+  - action: logbook.log
+    data:
+      name: 喂奶计时
+      message: 喂奶计时点 {{ now().strftime('%m-%d %H:%M') }}
+  mode: queued
+  max: 10
+- actions:
+  - variables:
+      line: 提醒一下，宝宝该喂奶了。距上次喂奶已经 {{ (m // 60) | int }} 小时 {{ (m % 60) | int }} 分钟。
+      m: '{% set l = state_attr(''automation.wei_nai_ji_shi_qi'',''last_triggered'') %}{{ (((now() - l).total_seconds() // 60) | int) if l else 0 }}'
+  - action: notify.send_message
+    continue_on_error: true
+    data:
+      message: '{{ line }}'
+    target:
+      entity_id:
+      - notify.xiaomi_cn_YOUR_HOME_SCREEN_ID_x8f_play_text_a_7_3
+      - notify.xiaomi_cn_YOUR_ROOM1_PANEL_ID_86v1_play_text_a_5_3
+  - action: logbook.log
+    data:
+      message: '{{ line }}'
+      name: 喂奶提醒
+  alias: 喂奶时间提醒
+  conditions:
+  - condition: template
+    value_template: '{% set l = state_attr(''automation.wei_nai_ji_shi_qi'',''last_triggered'') %}{% set r = state_attr(''automation.wei_nai_shi_jian_ti_xing'',''last_triggered'') %}{% if not l %}false{% else %}{% set mins
+      = (now() - l).total_seconds() / 60 %}{{ mins >= 180 and now().hour >= 7 and now().hour < 22 and (r is none or r < l or (now() - r).total_seconds() >= 2400) }}{% endif %}'
+  description: 距上次喂奶超过 3 小时、且在 07:00-22:00 时，用客厅家庭屏播报提醒（夜里不响，避免吵醒宝宝）
+  id: 'baby_reminder'
+  max_exceeded: silent
+  mode: single
+  triggers:
+  - minutes: /5
+    trigger: time_pattern
+- id: 'baby_query'
+  alias: 答复上次喂养时间
+  triggers:
+  - trigger: state
+    entity_id:
+    - event.xiaomi_cn_YOUR_HUB_DEVICE_ID_hub1_virtual_event_e_4_1
+  conditions: []
+  actions:
+  - variables:
+      nm: '{% set ts = trigger.to_state %}{{ (ts.attributes.get(''事件名称'','''') | trim) if ts is not none else '''' }}'
+  - condition: template
+    value_template: '{{ ''询问上次喂养时间'' in nm }}'
+  - action: todo.get_items
+    target:
+      entity_id: todo.bao_bao_ji_lu
+    response_variable: r
+  - variables:
+      feed: '{% set it = r[''todo.bao_bao_ji_lu''][''items''] %}{% set ns = namespace(best='''') %}{% for x in it %}{% if ''🍼'' in x[''summary''] %}{% set p = x[''summary''][:11] %}{% if p > ns.best %}{% set ns.best = p %}{%
+        endif %}{% endif %}{% endfor %}{{ ns.best }}'
+      say: '{% set b = feed %}{% if not b %}还没有喂奶记录。{% else %}{% set t = now().replace(month=b[0:2]|int, day=b[3:5]|int, hour=b[6:8]|int, minute=b[9:11]|int, second=0, microsecond=0) %}{% if t > now() %}{% set t = t.replace(year=t.year-1)
+        %}{% endif %}{% set mins = ((now()-t).total_seconds()//60)|int %}{% set today = now().strftime(''%m-%d'') %}{% set yday = (now()-timedelta(days=1)).strftime(''%m-%d'') %}{% set when = (''今天 '' if b[:5]==today else
+        (''昨天 '' if b[:5]==yday else b[:5]+'' '')) + b[6:11] %}上次喂奶是{{ when }}，距现在{{ (mins//60)|int }}小时{{ (mins%60)|int }}分钟。{% endif %}'
+      target: '{% if ''客厅'' in nm %}notify.xiaomi_cn_YOUR_HOME_SCREEN_ID_x8f_play_text_a_7_3{% elif ''主卧'' in nm %}notify.xiaomi_cn_YOUR_ROOM1_PANEL_ID_86v1_play_text_a_5_3{% elif ''北次卧'' in nm %}notify.xiaomi_cn_YOUR_ROOM2_PANEL_ID_86v1_play_text_a_5_3{%
+        elif ''南次卧'' in nm %}notify.xiaomi_cn_YOUR_ROOM3_PANEL_ID_86v1_play_text_a_5_3{% else %}[notify.xiaomi_cn_YOUR_ROOM2_PANEL_ID_86v1_play_text_a_5_3, notify.xiaomi_cn_YOUR_ROOM3_PANEL_ID_86v1_play_text_a_5_3]{% endif %}'
+  - action: notify.send_message
+    target:
+      entity_id: '{{ target }}'
+    data:
+      message: '{{ say }}'
+    continue_on_error: true
+  - action: logbook.log
+    data:
+      name: 喂养时间查询
+      message: '{{ nm }} → {{ say }}'
+  mode: single

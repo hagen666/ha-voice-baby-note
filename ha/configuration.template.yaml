@@ -1,0 +1,33 @@
+# ============================================================
+# 育儿记录 · configuration.yaml 片段
+#
+# 用法：把下面内容合并到 /config/configuration.yaml
+# 注意：如果你的 configuration.yaml 已有 input_datetime: 或 template:，
+#       请做增量合并，不要整体覆盖。
+# ============================================================
+
+# ---------- 1. 记录「上次喂奶时间」的输入实体 ----------
+# 补记功能会先写这个，再由脚本写入清单
+input_datetime:
+  wei_nai_shi_jian:
+    name: 上次喂奶时间（可补记）
+    has_date: true
+    has_time: true
+    icon: mdi:clock-outline
+
+# ---------- 2. 模板传感器 ----------
+template:
+  - sensor:
+      # 直接暴露 input_datetime 的值，方便卡片展示
+      - name: 上次喂奶时间
+        unique_id: wei_nai_shi_jian_sensor
+        icon: mdi:clock-outline
+        state: "{{ states('input_datetime.wei_nai_shi_jian') }}"
+
+      # 距上次喂奶多少分钟（用于提醒自动化）
+      - name: 距上次喂奶_分
+        unique_id: ju_wei_nai_minutes
+        icon: mdi:timer-sand
+        state: >-
+          {% set t = as_datetime(states('input_datetime.wei_nai_shi_jian')).astimezone() %}
+          {{ ((now() - t).total_seconds() / 60) | int if t is not none else 0 }}
